@@ -35,7 +35,7 @@ export default {
         const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
 
         // Armazena no KV com expiração de 10 minutos (600s)
-        await env.OTP_STORE.put(`otp:${email}`, generatedCode, { expirationTtl: 600 });
+        await env.GM_MESENGER.put(`otp:${email}`, generatedCode, { expirationTtl: 600 });
 
         const mailResponse = await fetch(EMAIL_API_ENDPOINT, {
           method: "POST",
