@@ -7,5 +7,5 @@ assets = { directory = "./public" }
 
 # Vinculação com o Cloudflare KV (Substitua o ID pelo ID do seu namespace no painel da Cloudflare)
 [[kv_namespaces]]
-binding = "OTP_STORE"
-id = "COLE_O_ID_DO_SEU_KV_AQUI"
+binding = "GM_MESENGER"
+id = "feaddf21f7f8420589b7ca9596772f42"
