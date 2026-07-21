@@ -1,5 +1,5 @@
 /**
- * GM MESSENGER - Worker Único (Backend + API OTP + Interface Web)
+ * GM MESSENGER - Worker Único (Backend + API OTP + Contatos Reais + Interface Web)
  */
 
 const EMAIL_API_ENDPOINT = "https://email.gmcorporation.com.br/api/messages/send";
@@ -66,7 +66,7 @@ export default {
       }
     }
 
-    /* 2. ROTA: VALIDAR CÓDIGO */
+    /* 2. ROTA: VALIDAR CÓDIGO E REGISTRAR CONTATO REAL */
     if (url.pathname === "/api/auth/verify-code" && request.method === "POST") {
       try {
         const { email, code } = await request.json();
@@ -83,6 +83,19 @@ export default {
 
         if (storedCode === code.trim()) {
           await env.GM_MESENGER.delete(`otp:${email}`);
+
+          // EXTRAI NOME DO E-MAIL (ex: guilherme@... -> Guilherme)
+          const rawName = email.split('@')[0];
+          const formattedName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+
+          // SALVA O USUÁRIO NO DIRETÓRIO DE CONTATOS DO KV
+          const userData = {
+            nome: formattedName,
+            email: email,
+            lastSeen: Date.now()
+          };
+          await env.GM_MESENGER.put(`user:${email}`, JSON.stringify(userData));
+
           return Response.json({ success: true, message: "Acesso aprovado com sucesso!" }, { headers: corsHeaders });
         } else {
           return Response.json({ success: false, error: "Código incorreto. Confira no seu e-mail e tente novamente." }, { status: 401, headers: corsHeaders });
@@ -92,7 +105,27 @@ export default {
       }
     }
 
-    /* 3. INTERFACE COMPLETA (HTML/CSS/JS) */
+    /* 3. NOVA ROTA: LISTAR CONTATOS REAIS DO PROVEDOR */
+    if (url.pathname === "/api/contacts" && request.method === "GET") {
+      try {
+        // Lista todas as chaves com prefixo "user:"
+        const list = await env.GM_MESENGER.list({ prefix: "user:" });
+
+        const contatos = await Promise.all(
+          list.keys.map(async (k) => {
+            const data = await env.GM_MESENGER.get(k.name, "json");
+            return data;
+          })
+        );
+
+        // Retorna a lista sem nulos
+        return Response.json({ success: true, contacts: contatos.filter(Boolean) }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: "Erro ao buscar contatos." }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    /* 4. INTERFACE COMPLETA (HTML/CSS/JS) */
     const htmlContent = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -130,7 +163,8 @@ export default {
 
     #app-container { display: none; width: 100vw; height: 100vh; grid-template-columns: 380px 1fr; }
     .sidebar { background: var(--panel-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-    .sidebar-header { height: 60px; background: #202c33; display: flex; align-items: center; padding: 0 1rem; border-bottom: 1px solid var(--border); gap: 10px; }
+    .sidebar-header { height: 60px; background: #202c33; display: flex; align-items: center; padding: 0 1rem; border-bottom: 1px solid var(--border); gap: 10px; justify-content: space-between; }
+    .user-info { display: flex; align-items: center; gap: 10px; }
     .user-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: bold; color: #fff; }
     .contacts-list { flex: 1; overflow-y: auto; }
     .contact-item { padding: 0.9rem 1rem; border-bottom: 1px solid #182229; cursor: pointer; display: flex; align-items: center; gap: 12px; }
@@ -182,11 +216,14 @@ export default {
   <div id="app-container">
     <div class="sidebar">
       <div class="sidebar-header">
-        <div class="user-avatar" id="my-avatar">U</div>
-        <div>
-          <strong id="user-display-name" style="font-size:0.9rem;">Usuário</strong><br/>
-          <small style="color:var(--accent); font-size:0.75rem;">● On-line</small>
+        <div class="user-info">
+          <div class="user-avatar" id="my-avatar">U</div>
+          <div>
+            <strong id="user-display-name" style="font-size:0.9rem;">Usuário</strong><br/>
+            <small style="color:var(--accent); font-size:0.75rem;">● On-line</small>
+          </div>
         </div>
+        <button class="btn-icon" onclick="carregarContatos()" title="Atualizar Lista de Contatos">🔄</button>
       </div>
       <div class="contacts-list" id="contacts-list"></div>
     </div>
@@ -225,12 +262,6 @@ export default {
     let mediaRecorder = null;
     let audioChunks = [];
     let isRecording = false;
-
-    const contatosCorporativos = [
-      { nome: "Suporte Técnico", email: "suporte@email.gmcorporation.com.br" },
-      { nome: "Diretoria Operational", email: "diretoria@email.gmcorporation.com.br" },
-      { nome: "Engenharia de Sistemas", email: "engenharia@email.gmcorporation.com.br" }
-    ];
 
     function exibirBanner(msg, type) {
       const banner = document.getElementById("auth-banner");
@@ -297,10 +328,10 @@ export default {
           document.getElementById("app-container").style.display = "grid";
           
           const name = currentUser.split('@')[0];
-          document.getElementById("user-display-name").innerText = name;
+          document.getElementById("user-display-name").innerText = name.charAt(0).toUpperCase() + name.slice(1);
           document.getElementById("my-avatar").innerText = name.charAt(0).toUpperCase();
 
-          carregarContatos();
+          await carregarContatos();
         } else {
           exibirBanner(data.error || "Código reprovado.", "error");
           btn.disabled = false;
@@ -312,28 +343,47 @@ export default {
       }
     }
 
-    function carregarContatos() {
+    async function carregarContatos() {
       const container = document.getElementById("contacts-list");
-      container.innerHTML = "";
+      container.innerHTML = "<div style='padding:1rem; color:var(--text-dim); text-align:center;'>Buscando contatos...</div>";
 
-      contatosCorporativos.forEach((c) => {
-        if (c.email === currentUser) return;
-        const div = document.createElement("div");
-        div.className = "contact-item";
-        div.onclick = () => {
-          activeContact = c;
-          document.querySelectorAll(".contact-item").forEach(i => i.classList.remove("active"));
-          div.classList.add("active");
-          document.getElementById("current-contact-name").innerText = c.nome;
-          document.getElementById("current-contact-email").innerText = c.email;
-          document.getElementById("chat-avatar").innerText = c.nome.charAt(0);
-          document.getElementById("msg-input").disabled = false;
-          document.getElementById("messages-container").innerHTML = "";
-        };
+      try {
+        const res = await fetch("/api/contacts");
+        const data = await res.json();
 
-        div.innerHTML = \`<div class="user-avatar">\${c.nome.charAt(0)}</div><div><div class="contact-name">\${c.nome}</div><div class="contact-email">\${c.email}</div></div>\`;
-        container.appendChild(div);
-      });
+        container.innerHTML = "";
+
+        if (data.success && data.contacts.length > 0) {
+          const contatosFiltrados = data.contacts.filter(c => c.email !== currentUser);
+
+          if (contatosFiltrados.length === 0) {
+            container.innerHTML = "<div style='padding:1rem; color:var(--text-dim); text-align:center;'>Nenhum outro usuário cadastrado ainda.</div>";
+            return;
+          }
+
+          contatosFiltrados.forEach((c) => {
+            const div = document.createElement("div");
+            div.className = "contact-item";
+            div.onclick = () => {
+              activeContact = c;
+              document.querySelectorAll(".contact-item").forEach(i => i.classList.remove("active"));
+              div.classList.add("active");
+              document.getElementById("current-contact-name").innerText = c.nome;
+              document.getElementById("current-contact-email").innerText = c.email;
+              document.getElementById("chat-avatar").innerText = c.nome.charAt(0);
+              document.getElementById("msg-input").disabled = false;
+              document.getElementById("messages-container").innerHTML = "";
+            };
+
+            div.innerHTML = \`<div class="user-avatar">\${c.nome.charAt(0)}</div><div><div class="contact-name">\${c.nome}</div><div class="contact-email">\${c.email}</div></div>\`;
+            container.appendChild(div);
+          });
+        } else {
+          container.innerHTML = "<div style='padding:1rem; color:var(--text-dim); text-align:center;'>Nenhum contato encontrado.</div>";
+        }
+      } catch (err) {
+        container.innerHTML = "<div style='padding:1rem; color:var(--text-dim); text-align:center;'>Erro ao carregar lista de contatos.</div>";
+      }
     }
 
     function enviarMensagemTexto() {
