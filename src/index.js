@@ -1,5 +1,5 @@
 /**
- * GM MESSENGER - Worker Único (Backend + API OTP + Contatos Reais + Interface Web)
+ * GM MESSENGER - Worker Único (Backend + API OTP + Contatos Reais + Mensagens em Tempo Real)
  */
 
 const EMAIL_API_ENDPOINT = "https://email.gmcorporation.com.br/api/messages/send";
@@ -34,7 +34,6 @@ export default {
 
         const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-        // Armazena no KV com expiração de 10 minutos (600s)
         await env.GM_MESENGER.put(`otp:${email}`, generatedCode, { expirationTtl: 600 });
 
         const mailResponse = await fetch(EMAIL_API_ENDPOINT, {
@@ -84,11 +83,9 @@ export default {
         if (storedCode === code.trim()) {
           await env.GM_MESENGER.delete(`otp:${email}`);
 
-          // EXTRAI NOME DO E-MAIL (ex: guilherme@... -> Guilherme)
           const rawName = email.split('@')[0];
           const formattedName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
 
-          // SALVA O USUÁRIO NO DIRETÓRIO DE CONTATOS DO KV
           const userData = {
             nome: formattedName,
             email: email,
@@ -105,27 +102,79 @@ export default {
       }
     }
 
-    /* 3. NOVA ROTA: LISTAR CONTATOS REAIS DO PROVEDOR */
+    /* 3. ROTA: LISTAR CONTATOS REAIS DO PROVEDOR */
     if (url.pathname === "/api/contacts" && request.method === "GET") {
       try {
-        // Lista todas as chaves com prefixo "user:"
         const list = await env.GM_MESENGER.list({ prefix: "user:" });
-
         const contatos = await Promise.all(
-          list.keys.map(async (k) => {
-            const data = await env.GM_MESENGER.get(k.name, "json");
-            return data;
-          })
+          list.keys.map(async (k) => await env.GM_MESENGER.get(k.name, "json"))
         );
 
-        // Retorna a lista sem nulos
         return Response.json({ success: true, contacts: contatos.filter(Boolean) }, { headers: corsHeaders });
       } catch (err) {
         return Response.json({ success: false, error: "Erro ao buscar contatos." }, { status: 500, headers: corsHeaders });
       }
     }
 
-    /* 4. INTERFACE COMPLETA (HTML/CSS/JS) */
+    /* 4. NOVA ROTA: ENVIAR MENSAGEM (TEXTO, EMOJI OU ÁUDIO) */
+    if (url.pathname === "/api/messages/send" && request.method === "POST") {
+      try {
+        const { sender, recipient, content, isAudio } = await request.json();
+
+        if (!sender || !recipient || !content) {
+          return Response.json({ success: false, error: "Dados incompletos para envio." }, { status: 400, headers: corsHeaders });
+        }
+
+        // Chave do Chat padronizada por ordem alfabética para os dois verem a mesma conversa
+        const chatKey = [sender, recipient].sort().join("<->");
+        const fullKey = `chat:${chatKey}`;
+
+        const historyRaw = await env.GM_MESENGER.get(fullKey);
+        const history = historyRaw ? JSON.parse(historyRaw) : [];
+
+        const newMsg = {
+          id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          sender,
+          recipient,
+          content,
+          isAudio: !!isAudio,
+          timestamp: Date.now()
+        };
+
+        history.push(newMsg);
+
+        // Salva histórico no KV
+        await env.GM_MESENGER.put(fullKey, JSON.stringify(history));
+
+        return Response.json({ success: true, message: newMsg }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: "Erro ao salvar mensagem no servidor." }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    /* 5. NOVA ROTA: BUSCAR MENSAGENS EM TEMPO REAL */
+    if (url.pathname === "/api/messages/get" && request.method === "GET") {
+      try {
+        const user1 = url.searchParams.get("user1");
+        const user2 = url.searchParams.get("user2");
+
+        if (!user1 || !user2) {
+          return Response.json({ success: false, error: "Usuários não informados." }, { status: 400, headers: corsHeaders });
+        }
+
+        const chatKey = [user1, user2].sort().join("<->");
+        const fullKey = `chat:${chatKey}`;
+
+        const historyRaw = await env.GM_MESENGER.get(fullKey);
+        const history = historyRaw ? JSON.parse(historyRaw) : [];
+
+        return Response.json({ success: true, messages: history }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: "Erro ao carregar mensagens." }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    /* 6. INTERFACE COMPLETA (HTML/CSS/JS) */
     const htmlContent = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -176,9 +225,10 @@ export default {
     .chat-area { display: flex; flex-direction: column; background: #0b141a; position: relative; }
     .chat-header { height: 60px; background: var(--panel-bg); display: flex; align-items: center; padding: 0 1rem; border-bottom: 1px solid var(--border); gap: 12px; }
     .messages-container { flex: 1; padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.8rem; background-image: radial-gradient(rgba(255,255,255,0.03) 1px, transparent 0); background-size: 24px 24px; }
-    .message { max-width: 60%; padding: 0.6rem 0.9rem; border-radius: 8px; font-size: 0.9rem; position: relative; word-break: break-word; }
+    .message { max-width: 65%; padding: 0.6rem 0.9rem; border-radius: 8px; font-size: 0.9rem; position: relative; word-break: break-word; }
     .message.sent { align-self: flex-end; background: var(--msg-out); }
     .message.received { align-self: flex-start; background: var(--msg-in); }
+    .message audio { margin-top: 4px; max-width: 100%; }
 
     .input-bar { height: 62px; background: var(--panel-bg); display: flex; align-items: center; padding: 0 1rem; gap: 10px; position: relative; }
     .input-bar input { flex: 1; padding: 0.7rem 1rem; border-radius: 8px; border: none; background: #2a3942; color: var(--text); outline: none; }
@@ -262,6 +312,8 @@ export default {
     let mediaRecorder = null;
     let audioChunks = [];
     let isRecording = false;
+    let pollingInterval = null;
+    let knownMessageIds = new Set();
 
     function exibirBanner(msg, type) {
       const banner = document.getElementById("auth-banner");
@@ -364,16 +416,7 @@ export default {
           contatosFiltrados.forEach((c) => {
             const div = document.createElement("div");
             div.className = "contact-item";
-            div.onclick = () => {
-              activeContact = c;
-              document.querySelectorAll(".contact-item").forEach(i => i.classList.remove("active"));
-              div.classList.add("active");
-              document.getElementById("current-contact-name").innerText = c.nome;
-              document.getElementById("current-contact-email").innerText = c.email;
-              document.getElementById("chat-avatar").innerText = c.nome.charAt(0);
-              document.getElementById("msg-input").disabled = false;
-              document.getElementById("messages-container").innerHTML = "";
-            };
+            div.onclick = () => selecionarContato(c, div);
 
             div.innerHTML = \`<div class="user-avatar">\${c.nome.charAt(0)}</div><div><div class="contact-name">\${c.nome}</div><div class="contact-email">\${c.email}</div></div>\`;
             container.appendChild(div);
@@ -386,13 +429,71 @@ export default {
       }
     }
 
+    function selecionarContato(contato, el) {
+      activeContact = contato;
+      document.querySelectorAll(".contact-item").forEach(i => i.classList.remove("active"));
+      if (el) el.classList.add("active");
+
+      document.getElementById("current-contact-name").innerText = contato.nome;
+      document.getElementById("current-contact-email").innerText = contato.email;
+      document.getElementById("chat-avatar").innerText = contato.nome.charAt(0);
+      document.getElementById("msg-input").disabled = false;
+      
+      document.getElementById("messages-container").innerHTML = "";
+      knownMessageIds.clear();
+
+      // Inicia o Loop em Tempo Real
+      sincronizarMensagens();
+      if (pollingInterval) clearInterval(pollingInterval);
+      pollingInterval = setInterval(sincronizarMensagens, 2000);
+    }
+
+    async function sincronizarMensagens() {
+      if (!activeContact) return;
+
+      try {
+        const res = await fetch(\`/api/messages/get?user1=\${encodeURIComponent(currentUser)}&user2=\${encodeURIComponent(activeContact.email)}\`);
+        const data = await res.json();
+
+        if (data.success && data.messages) {
+          data.messages.forEach(msg => {
+            if (!knownMessageIds.has(msg.id)) {
+              knownMessageIds.add(msg.id);
+              const tipo = msg.sender === currentUser ? 'sent' : 'received';
+              renderizarMsg(msg.content, tipo, msg.isAudio);
+            }
+          });
+        }
+      } catch (err) { console.error("Erro na sincronização:", err); }
+    }
+
+    async function enviarMensagemServidor(content, isAudio = false) {
+      if (!activeContact) return;
+
+      try {
+        await fetch("/api/messages/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender: currentUser,
+            recipient: activeContact.email,
+            content: content,
+            isAudio: isAudio
+          })
+        });
+
+        sincronizarMensagens();
+      } catch (err) { alert("Falha ao enviar mensagem."); }
+    }
+
     function enviarMensagemTexto() {
       const input = document.getElementById("msg-input");
       const texto = input.value.trim();
       if (!texto || !activeContact) return;
 
-      renderizarMsg(texto, 'sent');
+      enviarMensagemServidor(texto, false);
       input.value = "";
+      document.getElementById("emoji-picker").style.display = "none";
     }
 
     function renderizarMsg(conteudo, tipo, isAudio = false) {
@@ -434,7 +535,12 @@ export default {
           mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
           mediaRecorder.onstop = () => {
             const blob = new Blob(audioChunks, { type: 'audio/webm' });
-            renderizarMsg(URL.createObjectURL(blob), 'sent', true);
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = () => {
+              const base64Audio = reader.result;
+              enviarMensagemServidor(base64Audio, true);
+            };
           };
           mediaRecorder.start();
           isRecording = true;
