@@ -75,7 +75,7 @@ export default {
           return Response.json({ success: false, error: "Informe o e-mail e o código recebido." }, { status: 400, headers: corsHeaders });
         }
 
-        const storedCode = await env.OTP_STORE.get(`otp:${email}`);
+        const storedCode = await env.GM_MESENGER.get(`otp:${email}`);
 
         if (!storedCode) {
           return Response.json({ success: false, error: "Código expirado ou não encontrado. Solicite um novo." }, { status: 400, headers: corsHeaders });
