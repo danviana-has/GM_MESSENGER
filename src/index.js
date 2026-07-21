@@ -82,7 +82,7 @@ export default {
         }
 
         if (storedCode === code.trim()) {
-          await env.OTP_STORE.delete(`otp:${email}`);
+          await env.GM_MESENGER.delete(`otp:${email}`);
           return Response.json({ success: true, message: "Acesso aprovado com sucesso!" }, { headers: corsHeaders });
         } else {
           return Response.json({ success: false, error: "Código incorreto. Confira no seu e-mail e tente novamente." }, { status: 401, headers: corsHeaders });
